@@ -49,7 +49,8 @@ fs::path make_relative_path(const fs::path& from, const fs::path& to) {
 	auto to_it = to.begin();
 	if (*from_it == *to_it) {
 		for (; *from_it == *to_it; ++from_it, ++to_it);
-		for (; ++from_it != from.end();) res /= "..";
+		++from_it;
+		for (; from_it != from.end(); ++from_it) res /= "..";
 		for (; to_it != to.end(); ++to_it) res /= *to_it;
 	} else {
 		res = to;
@@ -60,6 +61,7 @@ fs::path make_relative_path(const fs::path& from, const fs::path& to) {
 void symlink_same_files(const set<fs::path>& files,
 	const set<fs::path>& existing_symlink_targets, bool interactive = false)
 {
+	// TODO implement interactive mode
 	fs::path target;
 	for (auto it = files.cbegin(); it != files.cend(); ++it) {
 		if (existing_symlink_targets.count(*it)) {
@@ -68,13 +70,13 @@ void symlink_same_files(const set<fs::path>& files,
 		}
 	}
 	if (target.empty()) target = *files.begin();
-	auto symlink_files = files;
-	symlink_files.erase(target);
-	for_each(symlink_files.cbegin(), symlink_files.cend(), [&target](fs::path path) {
-		target = make_relative_path(path, target);
-		wcout << path.wstring() << L" -> " << make_relative_path(path, target).wstring() << endl;
-		fs::remove(path);
-		fs::create_symlink(target, path);
+	for_each(files.cbegin(), files.cend(), [&target](fs::path path) {
+		if (path != target) {
+			fs::path relative_path = make_relative_path(path, target);
+			wcout << path.wstring() << L" -> " << relative_path.wstring() << endl;
+			fs::remove(path);
+			fs::create_symlink(relative_path, path);
+		}
 	});
 }
 
@@ -82,7 +84,7 @@ int wmain(int argc, wchar_t* argv[]) {
 	bool interactive = false;
 	bool show_help = false;
 	size_t min_filesize = 4096;
-	vector<wstring> dirs;
+	vector<wstring> input_dirs;
 
 	po::options_description opdp("options");
 	opdp.add_options()
@@ -93,7 +95,7 @@ int wmain(int argc, wchar_t* argv[]) {
 
 	po::options_description opd;
 	opd.add(opdp);
-	opd.add_options()("input", po::wvalue(&dirs), "input");
+	opd.add_options()("input", po::wvalue(&input_dirs), "input");
 	po::positional_options_description opp;
 	opp.add("input", -1);
 
@@ -112,33 +114,31 @@ int wmain(int argc, wchar_t* argv[]) {
 		return 0;
 	}
 
-	if (dirs.empty()) {
+	if (input_dirs.empty()) {
 		cout << "no directories specified" << endl;
 		return 1;
 	}
 
 	cout << "interactive: " << (interactive ? "yes" : "no") << endl;
 	cout << "min filesize: " << min_filesize << endl;
-	wcout << L"directories: " << dirs << endl;
+	wcout << L"directories: " << input_dirs << endl;
 
 	map<pair<int, uintmax_t>, set<fs::path>> found_files;
 	set<fs::path> symlink_targets;
 
-	for (auto dirs_it = dirs.cbegin(); dirs_it != dirs.cend(); ++dirs_it) {
+	for (auto dirs_it = input_dirs.cbegin(); dirs_it != input_dirs.cend(); ++dirs_it) {
 		fs::recursive_directory_iterator it(*dirs_it);
 		fs::recursive_directory_iterator end;
-		fs::path path;
-		uintmax_t filesize;
 		for (; it != end; ++it) {
 			try {
-				path = it->path();
+				fs::path path = it->path();
 				if (fs::is_symlink(path)) {
 					path = fs::read_symlink(path);
 					path = fs::system_complete(path);
 					symlink_targets.insert(path);
 				} else if (fs::is_regular_file(path)) {
 					path = fs::system_complete(path);
-					filesize = fs::file_size(path);
+					uintmax_t filesize = fs::file_size(path);
 					if (filesize >= min_filesize) {
 						found_files[make_pair(compute_checksum(path), filesize)].insert(path);
 					}			
